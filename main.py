@@ -1,8 +1,10 @@
 import asyncio
 import websockets
 import cv2
+from posture_monitor import PostureMonitor
 
 RTSP_URL = "rtsp://192.168.100.41:8554/stream"
+posture_monitor = PostureMonitor()
 
 async def stream_frames(websocket):
     cap = cv2.VideoCapture(RTSP_URL)
@@ -18,6 +20,8 @@ async def stream_frames(websocket):
         if not ret:
             print("⚠️ Frame inválido, terminando.")
             break
+
+        frame = posture_monitor.process_frame(frame)
 
         frame_count += 1
         if frame_count % 30 == 0:
@@ -36,7 +40,6 @@ async def main():
     async with websockets.serve(handler, "0.0.0.0", 8765):
         print("✅ Backend WebSocket activo en puerto 8765")
         await asyncio.Future()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
