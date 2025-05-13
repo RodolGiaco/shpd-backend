@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend-pod
+  name: shpd-backend
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: backend
+      app: shpd-backend
   template:
     metadata:
       labels:
-        app: backend
+        app: shpd-backend
     spec:
       containers:
       - name: backend
-        image: rodolgiaco/shpd:1.0
+        image: rodolgiaco/shpd-backend:2.0
         ports:
         - containerPort: 8765
         resources:
