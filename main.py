@@ -1,45 +1,79 @@
 import asyncio
-import websockets
+import logging
 import cv2
+import numpy as np
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+from api.routers import pacientes
+from api.database import Base, engine
 from posture_monitor import PostureMonitor
 
-RTSP_URL = "rtsp://192.168.100.41:8554/stream"
+# ——— Desactivar logs no críticos ———
+logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.access").disabled = True
+
+app = FastAPI()
 posture_monitor = PostureMonitor()
+Base.metadata.create_all(bind=engine)
 
-async def stream_frames(websocket):
-    cap = cv2.VideoCapture(RTSP_URL)
-    if not cap.isOpened():
-        print("❌ No se pudo abrir el stream RTSP")
-        return
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    print("🎥 RTSP abierto correctamente. Esperando clientes WebSocket...")
+app.include_router(pacientes.router)
 
-    frame_count = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            print("⚠️ Frame inválido, terminando.")
-            break
+processed_frames_queue = asyncio.Queue(maxsize=1)  # Solo el último frame
 
-        frame = posture_monitor.process_frame(frame)
+@app.websocket("/video/input")
+async def video_input(websocket: WebSocket):
+    await websocket.accept()
+    loop = asyncio.get_running_loop()
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            frame = await loop.run_in_executor(None, _decode_jpeg, data)
+            if frame is None:
+                continue
+            processed = await loop.run_in_executor(None, posture_monitor.process_frame, frame)
+            jpeg = await loop.run_in_executor(None, _encode_jpeg, processed)
+            if processed_frames_queue.full():
+                processed_frames_queue.get_nowait()
+            await processed_frames_queue.put(jpeg)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
 
-        frame_count += 1
-        if frame_count % 30 == 0:
-            print(f"🟢 Enviados {frame_count} frames")
+@app.websocket("/video/output")
+async def video_output(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            jpeg = processed_frames_queue.get_nowait()
+            asyncio.create_task(websocket.send_bytes(jpeg))
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
 
-        _, jpeg = cv2.imencode('.jpg', frame)
-        await websocket.send(jpeg.tobytes())
+def _decode_jpeg(data: bytes):
+    arr = np.frombuffer(data, np.uint8)
+    return cv2.imdecode(arr, cv2.IMREAD_COLOR)
 
-    cap.release()
-
-async def handler(websocket):
-    print("🔌 Cliente WebSocket conectado")
-    await stream_frames(websocket)
-
-async def main():
-    async with websockets.serve(handler, "0.0.0.0", 8765):
-        print("✅ Backend WebSocket activo en puerto 8765")
-        await asyncio.Future()
+def _encode_jpeg(frame):
+    _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+    return buf.tobytes()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8765,
+        log_level="error",
+        access_log=False
+    )
