@@ -14,8 +14,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: shpd-backend:7.6
-        imagePullPolicy: Never
+        image: rodolgiaco/shpd-backend:9.0
         ports:
         - containerPort: 8765
           hostPort: 8765

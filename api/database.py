@@ -15,7 +15,7 @@ DATABASE_URL = os.getenv(
 # 2) Crea el engine de SQLAlchemy
 engine = create_engine(
     DATABASE_URL,
-    echo=False,   # True para ver las consultas SQL en consola
+    echo=True,   # True para ver las consultas SQL en consola
     future=True   # activa la API 2.0 de SQLAlchemy
 )
 

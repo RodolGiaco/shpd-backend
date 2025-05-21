@@ -11,32 +11,23 @@ from api.models import Sesion
 from posture_monitor import PostureMonitor
 from api.routers import sesiones, pacientes, metricas
 
-# ——— Desactivar logs no críticos ———
-logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
 logging.getLogger("uvicorn.access").disabled = True
 
-# 1) Crea todas las tablas
 Base.metadata.create_all(bind=engine)
+db = SessionLocal()
+try:
+    nueva_sesion = Sesion(intervalo_segundos=600, modo="monitor_activo")
+    db.add(nueva_sesion)
+    db.commit()
+    db.refresh(nueva_sesion)
+    MI_SESION_ID = str(nueva_sesion.id)
+finally:
+    db.close()
 
 
-# # 2) Obtén una sesión
-# db = SessionLocal()
-# try:
-#     # 3) Usa la sesión para CRUD
-#     nueva_sesion = Sesion(intervalo_segundos=600, modo="monitor_activo")
-#     db.add(nueva_sesion)
-#     db.commit()
-#     db.refresh(nueva_sesion)
-#     MI_SESION_ID = str(nueva_sesion.id)
-# finally:
-#     # 4) Cierra la sesión para liberar la conexión
-#     db.close()
-
-# 3) Instancia tu monitor con ese ID
-
-# 4) Configura FastAPI y routers
 app = FastAPI()
-posture_monitor = PostureMonitor()
+posture_monitor = PostureMonitor(MI_SESION_ID)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

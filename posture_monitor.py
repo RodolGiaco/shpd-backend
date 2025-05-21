@@ -8,11 +8,12 @@ import os    # JSON FIX
 import datetime
 from api.database import SessionLocal
 from api.models import MetricaPostural
+import logging
+logger = logging.getLogger(__name__)
 class PostureMonitor:
-    # def __init__(self,  session_id: str):
-    def __init__(self):
+    def __init__(self,  session_id: str):
         self.mp_drawing = mp.solutions.drawing_utils
-        # self.session_id = session_id
+        self.session_id = session_id
         self.mp_pose = mp.solutions.pose  # RPI3 FIX
         self.args = self.parse_arguments()
 
@@ -55,35 +56,38 @@ class PostureMonitor:
         return parser.parse_args()
 
 
-    # def emit_metrics(self, fps: float, postura: str):
-    #         # 1) Calcula las métricas
-    #         total = self.good_frames + self.bad_frames or 1
-    #         datos = {
-    #             "actual": postura,
-    #             "porcentaje_correcta": round(self.good_frames / total * 100, 1),
-    #             "porcentaje_incorrecta": round(self.bad_frames / total * 100, 1),
-    #             "transiciones_malas": self.transitions,
-    #             "tiempo_sentado": round(self.bad_frames / fps, 1),
-    #             "tiempo_parado": round(self.good_frames / fps, 1),
-    #             "alertas_enviadas": self.alerts_sent,
-    #         }
+    def emit_metrics(self, fps: float, postura: str):
+            logger.debug("emit_metrics() called – fps=%s, postura=%r", fps, postura)
+            total = self.good_frames + self.bad_frames or 1
+            datos = {
+                "actual": postura,
+                "porcentaje_correcta": round(self.good_frames / total * 100, 1),
+                "porcentaje_incorrecta": round(self.bad_frames / total * 100, 1),
+                "transiciones_malas": self.transitions,
+                "tiempo_sentado": round(self.bad_frames / fps, 1),
+                "tiempo_parado": round(self.good_frames / fps, 1),
+                "alertas_enviadas": self.alerts_sent,
+            }
+            logger.debug("Calculated metrics payload: %s", datos)
 
-    #         # 2) Abre sesión de SQLAlchemy
-    #         db = SessionLocal()
-    #         try:
-    #             # 3) Crea el objeto ORM y persístelo
-    #             nueva = MetricaPostural(
-    #                 sesion_id=self.sesion_id,
-    #                 timestamp=datetime.utcnow(),
-    #                 datos=datos
-    #             )
-    #             db.add(nueva)
-    #             db.commit()
-    #         except Exception:
-    #             db.rollback()
-    #             raise
-    #         finally:
-    #             db.close()
+            db = SessionLocal()
+            try:
+                logger.debug("Opening DB session to insert metric for session_id=%s", self.sesion_id)
+                nueva = MetricaPostural(
+                    sesion_id=self.sesion_id,
+                    timestamp=datetime.utcnow(),
+                    datos=datos
+                )
+                db.add(nueva)
+                logger.debug("Added MetricaPostural ORM object: %r", nueva)
+                db.commit()
+                logger.info("Committed metrics for session_id=%s", self.sesion_id)
+            except Exception:
+                logger.exception("Failed to emit metrics for session_id=%s", self.sesion_id)
+                db.rollback()
+            finally:
+                db.close()
+                logger.debug("Closed DB session")
     
     def process_frame(self, image):
         h, w = image.shape[:2]
@@ -169,7 +173,3 @@ class PostureMonitor:
 
         cap.release()
         cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    monitor = PostureMonitor()
-    monitor.run()
