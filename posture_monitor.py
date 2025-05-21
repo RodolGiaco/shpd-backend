@@ -5,10 +5,14 @@ import mediapipe as mp  # RPI3 FIX
 import argparse
 import json  # JSON FIX
 import os    # JSON FIX
-
+import datetime
+from api.database import SessionLocal
+from api.models import MetricaPostural
 class PostureMonitor:
+    # def __init__(self,  session_id: str):
     def __init__(self):
         self.mp_drawing = mp.solutions.drawing_utils
+        # self.session_id = session_id
         self.mp_pose = mp.solutions.pose  # RPI3 FIX
         self.args = self.parse_arguments()
 
@@ -50,6 +54,37 @@ class PostureMonitor:
         parser.add_argument('--time-threshold', type=int, default=180, help='Time threshold for triggering a posture alert.')
         return parser.parse_args()
 
+
+    # def emit_metrics(self, fps: float, postura: str):
+    #         # 1) Calcula las métricas
+    #         total = self.good_frames + self.bad_frames or 1
+    #         datos = {
+    #             "actual": postura,
+    #             "porcentaje_correcta": round(self.good_frames / total * 100, 1),
+    #             "porcentaje_incorrecta": round(self.bad_frames / total * 100, 1),
+    #             "transiciones_malas": self.transitions,
+    #             "tiempo_sentado": round(self.bad_frames / fps, 1),
+    #             "tiempo_parado": round(self.good_frames / fps, 1),
+    #             "alertas_enviadas": self.alerts_sent,
+    #         }
+
+    #         # 2) Abre sesión de SQLAlchemy
+    #         db = SessionLocal()
+    #         try:
+    #             # 3) Crea el objeto ORM y persístelo
+    #             nueva = MetricaPostural(
+    #                 sesion_id=self.sesion_id,
+    #                 timestamp=datetime.utcnow(),
+    #                 datos=datos
+    #             )
+    #             db.add(nueva)
+    #             db.commit()
+    #         except Exception:
+    #             db.rollback()
+    #             raise
+    #         finally:
+    #             db.close()
+    
     def process_frame(self, image):
         h, w = image.shape[:2]
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -83,7 +118,6 @@ class PostureMonitor:
         else:
             self.good_frames = 0
             self.bad_frames += 1
-
             color = (50, 50, 255)
 
         cv2.putText(image, angle_text_string_neck, (10, 30), self.font, 0.6, color, 2)
@@ -115,7 +149,7 @@ class PostureMonitor:
 
         if bad_time > self.args.time_threshold:
             self.sendWarning()
-
+        # self.emit_metrics(fps, "menton_en_mano")
         return image
 
     def run(self):

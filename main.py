@@ -5,18 +5,38 @@ import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from api.routers import pacientes
-from api.database import Base, engine
+from api.models import Sesion, Paciente, MetricaPostural
+from api.database import Base, engine, SessionLocal
+from api.models import Sesion
 from posture_monitor import PostureMonitor
+from api.routers import sesiones, pacientes, metricas
 
 # ——— Desactivar logs no críticos ———
 logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
 logging.getLogger("uvicorn.access").disabled = True
 
-app = FastAPI()
-posture_monitor = PostureMonitor()
+# 1) Crea todas las tablas
 Base.metadata.create_all(bind=engine)
 
+
+# # 2) Obtén una sesión
+# db = SessionLocal()
+# try:
+#     # 3) Usa la sesión para CRUD
+#     nueva_sesion = Sesion(intervalo_segundos=600, modo="monitor_activo")
+#     db.add(nueva_sesion)
+#     db.commit()
+#     db.refresh(nueva_sesion)
+#     MI_SESION_ID = str(nueva_sesion.id)
+# finally:
+#     # 4) Cierra la sesión para liberar la conexión
+#     db.close()
+
+# 3) Instancia tu monitor con ese ID
+
+# 4) Configura FastAPI y routers
+app = FastAPI()
+posture_monitor = PostureMonitor()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,9 +45,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(sesiones.router)
 app.include_router(pacientes.router)
+app.include_router(metricas.router)
 
-processed_frames_queue = asyncio.Queue(maxsize=1)  # Solo el último frame
+processed_frames_queue = asyncio.Queue(maxsize=1)
 
 @app.websocket("/video/input")
 async def video_input(websocket: WebSocket):
@@ -54,8 +76,8 @@ async def video_output(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            jpeg = processed_frames_queue.get_nowait()
-            asyncio.create_task(websocket.send_bytes(jpeg))
+            jpeg = await processed_frames_queue.get()
+            await websocket.send_bytes(jpeg)
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -71,7 +93,7 @@ def _encode_jpeg(frame):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=8765,
         log_level="error",
