@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: rodolgiaco/shpd-backend:9.0
+        image: rodolgiaco/shpd-backend:1.1.0 
         ports:
         - containerPort: 8765
           hostPort: 8765
@@ -25,8 +25,8 @@ spec:
           value: postgresql://user:password@postgres-service:5432/shpd_db
         resources:
           requests:
-            memory: "1000Mi"
+            memory: "3000Mi"
             cpu: "200m"
           limits:
-            memory: "10000Mi"
+            memory: "30000Mi"
             cpu: "400m"

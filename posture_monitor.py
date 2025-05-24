@@ -5,10 +5,13 @@ import mediapipe as mp  # RPI3 FIX
 import argparse
 import json  # JSON FIX
 import os    # JSON FIX
-import datetime
+from datetime import datetime
 from api.database import SessionLocal
 from api.models import MetricaPostural
 import logging
+import redis
+
+r = redis.Redis(host='redis', port=6379, decode_responses=True)
 logger = logging.getLogger(__name__)
 class PostureMonitor:
     def __init__(self,  session_id: str):
@@ -52,44 +55,19 @@ class PostureMonitor:
         parser.add_argument('--offset-threshold', type=float, default=100, help='Threshold value for shoulder alignment.')  # JSON FIX
         parser.add_argument('--neck-angle-threshold', type=float, default=25, help='Threshold value for neck inclination angle.')  # JSON FIX
         parser.add_argument('--torso-angle-threshold', type=float, default=10, help='Threshold value for torso inclination angle.')  # JSON FIX
-        parser.add_argument('--time-threshold', type=int, default=180, help='Time threshold for triggering a posture alert.')
+        parser.add_argument('--time-threshold', type=int, default=15, help='Time threshold for triggering a posture alert.')
         return parser.parse_args()
 
 
-    def emit_metrics(self, fps: float, postura: str):
-            logger.debug("emit_metrics() called – fps=%s, postura=%r", fps, postura)
-            total = self.good_frames + self.bad_frames or 1
-            datos = {
-                "actual": postura,
-                "porcentaje_correcta": round(self.good_frames / total * 100, 1),
-                "porcentaje_incorrecta": round(self.bad_frames / total * 100, 1),
-                "transiciones_malas": self.transitions,
-                "tiempo_sentado": round(self.bad_frames / fps, 1),
-                "tiempo_parado": round(self.good_frames / fps, 1),
-                "alertas_enviadas": self.alerts_sent,
-            }
-            logger.debug("Calculated metrics payload: %s", datos)
 
-            db = SessionLocal()
-            try:
-                logger.debug("Opening DB session to insert metric for session_id=%s", self.sesion_id)
-                nueva = MetricaPostural(
-                    sesion_id=self.sesion_id,
-                    timestamp=datetime.utcnow(),
-                    datos=datos
-                )
-                db.add(nueva)
-                logger.debug("Added MetricaPostural ORM object: %r", nueva)
-                db.commit()
-                logger.info("Committed metrics for session_id=%s", self.sesion_id)
-            except Exception:
-                logger.exception("Failed to emit metrics for session_id=%s", self.sesion_id)
-                db.rollback()
-            finally:
-                db.close()
-                logger.debug("Closed DB session")
+    def guardar_metricas_en_redis(self, datos: dict):
+            key = f"metricas:{self.session_id}"
+            r.rpush(key, json.dumps(datos))
+            r.ltrim(key, -50, -1)  # conserva solo las últimas 50 métricas
+            
     
     def process_frame(self, image):
+        count = 0
         h, w = image.shape[:2]
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         keypoints = self.pose.process(image_rgb)
@@ -153,7 +131,25 @@ class PostureMonitor:
 
         if bad_time > self.args.time_threshold:
             self.sendWarning()
-        # self.emit_metrics(fps, "menton_en_mano")
+            count += 1
+        
+        logger.debug("emit_metrics() called – fps=%s", fps)
+        try:
+            total = self.good_frames + self.bad_frames or 1
+            datos = {
+                "actual": "menton_en_mano",
+                "porcentaje_correcta": round(self.good_frames / total * 100, 1),
+                "porcentaje_incorrecta": round(self.bad_frames / total * 100, 1),
+                "transiciones_malas": 1,
+                "tiempo_sentado": round(self.bad_frames / fps, 1),
+                "tiempo_parado": round(self.good_frames / fps, 1),
+                "alertas_enviadas": count,
+            }
+            logger.debug("Calculated metrics payload: %s", datos)
+        except Exception:
+            logger.exception("Failed metrics")
+        self.guardar_metricas_en_redis(datos)
+
         return image
 
     def run(self):

@@ -40,7 +40,7 @@ app.include_router(sesiones.router)
 app.include_router(pacientes.router)
 app.include_router(metricas.router)
 
-processed_frames_queue = asyncio.Queue(maxsize=1)
+processed_frames_queue = asyncio.Queue(maxsize=10)
 
 @app.websocket("/video/input")
 async def video_input(websocket: WebSocket):
@@ -88,5 +88,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8765,
         log_level="error",
-        access_log=False
+        access_log=True
     )

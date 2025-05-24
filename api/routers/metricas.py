@@ -1,24 +1,12 @@
-# routers/metricas.py
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from typing import List
-from api.database import get_db
-from api.models import MetricaPostural
-from api.schemas import MetricaIn, MetricaOut
-from uuid import UUID
-router = APIRouter(prefix="/metricas", tags=["metricas"])
+from fastapi import APIRouter
+import redis
+import json
 
-@router.post("/", response_model=MetricaOut)
-def crear_metrica(m: MetricaIn, db: Session = Depends(get_db)):
-    nueva = MetricaPostural(**m.dict())
-    db.add(nueva)
-    db.commit()
-    db.refresh(nueva)
-    return nueva
+router = APIRouter()
+r = redis.Redis(host='redis', port=6379, decode_responses=True)
 
-@router.get("/{sesion_id}", response_model=List[MetricaOut])
-def listar_metricas(sesion_id: UUID, db: Session = Depends(get_db)):
-    return db.query(MetricaPostural)\
-             .filter_by(sesion_id=sesion_id)\
-             .order_by(MetricaPostural.timestamp.desc())\
-             .all()
+@router.get("/metricas/{sesion_id}")
+def obtener_metricas(sesion_id: str):
+    key = f"metricas:{sesion_id}"
+    ultimas = r.lrange(key, -1, -1)  # última métrica
+    return json.loads(ultimas[0]) if ultimas else {}
