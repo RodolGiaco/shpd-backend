@@ -2,6 +2,8 @@ import asyncio
 import logging
 import cv2
 import numpy as np
+import time
+import redis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -11,9 +13,15 @@ from api.models import Sesion
 from posture_monitor import PostureMonitor
 from api.routers import sesiones, pacientes, metricas
 
-logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
-logging.getLogger("uvicorn.access").disabled = True
-
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+r = redis.Redis(host="redis", port=6379, decode_responses=True)
+logging.getLogger("posture_monitor").setLevel(logging.DEBUG)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
 Base.metadata.create_all(bind=engine)
 db = SessionLocal()
 try:
@@ -22,6 +30,12 @@ try:
     db.commit()
     db.refresh(nueva_sesion)
     MI_SESION_ID = str(nueva_sesion.id)
+    
+    start_ts = int(time.time())
+    r.hset(f"shpd-session:{MI_SESION_ID}", mapping={
+        "start_ts": start_ts,
+        "intervalo_segundos": nueva_sesion.intervalo_segundos,
+    })
 finally:
     db.close()
 
@@ -87,6 +101,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8765,
-        log_level="error",
+        log_level="warning",
         access_log=True
     )
