@@ -153,8 +153,12 @@ class PostureMonitor:
         if bad_time > self.args.time_threshold:
             if self.flag_alert:
                 self.sendWarning()
+                raw_key = f"raw_frame:{self.session_id}"
                 r.hincrby(buffer_key, "alert_count", 1)
+                logger.debug(f"✔️ start")
+                r.hset(raw_key, "flag_alert", "1")
                 self.flag_alert = False
+                logger.debug(f"✔️ Data save for alert")
 
         try:
             accum = r.hgetall(buffer_key)

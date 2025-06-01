@@ -2,6 +2,7 @@ from fastapi import APIRouter
 import redis
 import json
 
+
 router = APIRouter()
 r = redis.Redis(host='redis', port=6379, decode_responses=True)
 

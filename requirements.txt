@@ -7,3 +7,4 @@ uvicorn
 sqlalchemy
 psycopg2-binary
 redis
+openai>=0.27.0
