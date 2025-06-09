@@ -31,3 +31,10 @@ class SesionOut(SesionIn):
     id: UUID
     class Config:
         orm_mode = True
+        
+class PosturaCountOut(BaseModel):
+    session_id: str
+    posture_label: str
+    count: int
+    class Config:
+        orm_mode = True

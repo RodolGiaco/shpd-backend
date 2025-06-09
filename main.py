@@ -14,11 +14,10 @@ from openai import OpenAI
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from api.models import Sesion, Paciente, MetricaPostural
+from api.models import Sesion, Paciente, MetricaPostural, PosturaCount
 from api.database import Base, engine, SessionLocal
-from api.models import Sesion
 from posture_monitor import PostureMonitor
-from api.routers import sesiones, pacientes, metricas, analysis
+from api.routers import sesiones, pacientes, metricas, analysis, postura_counts
 
 r = redis.Redis(host="redis", port=6379, decode_responses=True)
 
@@ -202,6 +201,45 @@ async def api_analysis_worker():
             result: dict[str, bool] = json.loads(content)
             r.hset(f"analysis:{session_id}", mapping=result)
             logger.debug(f"✔️ Analysis saved for session {session_id}")
+            
+            
+            
+            if result:
+               # Encontrar la clave cuyo valor sea máximo
+               top_label, top_value = max(result.items(), key=lambda kv: kv[1])
+               # 3) Abrir sesión de DB para hacer upsert en PosturaCount
+               db = SessionLocal()
+               try:
+                   # Intentar obtener la fila existente
+                   fila = (
+                       db.query(PosturaCount)
+                       .filter(
+                           PosturaCount.session_id == session_id,
+                           PosturaCount.posture_label == top_label
+                       )
+                       .first()
+                   )
+                   if fila:
+                       # Si existe, incrementamos el contador
+                       fila.count += 1
+                       db.add(fila)
+                   else:
+                       # Si no existe, creamos una nueva fila
+                       nueva = PosturaCount(
+                           session_id=session_id,
+                           posture_label=top_label,
+                           count=1
+                       )
+                       db.add(nueva)
+                   db.commit()
+                   logger.debug(f"✔️ PostureCount updated: {session_id} - {top_label}")
+               except Exception:
+                   logger.exception("Error actualizando PosturaCount en DB")
+                   db.rollback()
+               finally:
+                   db.close()
+            
+            
         except Exception:
             logger.exception("Error en análisis OpenAI")
         finally:
@@ -238,6 +276,7 @@ app.include_router(sesiones.router)
 app.include_router(pacientes.router)
 app.include_router(metricas.router)
 app.include_router(analysis.router)
+app.include_router(postura_counts.router)
 processed_frames_queue = asyncio.Queue(maxsize=10)
 
 @app.websocket("/video/input")
@@ -285,24 +324,6 @@ async def video_output(websocket: WebSocket):
         pass
     except Exception:
         pass
-    
-@app.get("/analysis/{session_id}")
-async def get_analysis(session_id: str):
-    """
-    Devuelve el último JSON de clasificación de postura para la sesión,
-    almacenado en Redis bajo la clave analysis:{session_id}.
-    """
-    key = f"analysis:{session_id}"
-    raw = r.hgetall(key)
-    if not raw:
-        return {"detail": "No analysis available yet"}
-    # Convertir cadenas a tipos numéricos o JSON según corresponda
-    result = {
-        k: (json.loads(v) if (v.startswith("{") or v.startswith("[")) else
-            (float(v) if "." in v else int(v)))
-        for k, v in raw.items()
-    }
-    return result
 
 def _decode_jpeg(data: bytes):
     arr = np.frombuffer(data, np.uint8)

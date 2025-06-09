@@ -29,3 +29,9 @@ class Sesion(Base):
     intervalo_segundos = Column(Integer, nullable=False)
     modo = Column(String, nullable=False)
 
+class PosturaCount(Base):
+    __tablename__ = "postura_counts"
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, index=True, nullable=False)
+    posture_label = Column(String, nullable=False)
+    count = Column(Integer, default=0, nullable=False)
