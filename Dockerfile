@@ -16,6 +16,4 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-
-# 👇 Usa Python directo, NO uvicorn, porque FastAPI corre desde asyncio
 CMD ["python", "main.py"]
