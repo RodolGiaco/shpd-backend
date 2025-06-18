@@ -15,10 +15,13 @@ class MetricaOut(MetricaIn):
         orm_mode = True
         
 class PacienteOut(BaseModel):
+    id: int
+    telegram_id: str
+    device_id: str
     nombre: str
     edad: int
-    sexo: str
-    diagnostico: str
+    sexo: str | None = None
+    diagnostico: str | None = None
 
     class Config:
         orm_mode = True

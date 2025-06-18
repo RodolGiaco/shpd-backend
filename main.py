@@ -73,27 +73,10 @@ logger = logging.getLogger("shpd-backend")
 logger.setLevel(logging.DEBUG)
 
 
-Base.metadata.create_all(bind=engine)
-db = SessionLocal()
-try:
-    nueva_sesion = Sesion(intervalo_segundos=600, modo="monitor_activo")
-    db.add(nueva_sesion)
-    db.commit()
-    db.refresh(nueva_sesion)
-    MI_SESION_ID = str(nueva_sesion.id)
-    
-    start_ts = int(time.time())
-    r.hset(f"shpd-session:{MI_SESION_ID}", mapping={
-        "start_ts": start_ts,
-        "intervalo_segundos": nueva_sesion.intervalo_segundos,
-    })
-finally:
-    db.close()
-
 # ——— CONFIGURACIÓN DEL CLIENTE DE OPENAI ———
 API_KEY = os.getenv(
     "OPENAI_API_KEY",
-    "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"
+    "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"
 )
 client = OpenAI(api_key=API_KEY)
 MODEL = "gpt-4o-mini"
@@ -161,8 +144,6 @@ Proporciona ÚNICAMENTE el objeto JSON como salida, sin texto adicional."""
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",   "content": user_content}
     ]
-
-
 
 # ——— COLAS ASÍNCRONAS ———
 processed_frames_queue: asyncio.Queue = asyncio.Queue(maxsize=10)
@@ -246,15 +227,6 @@ async def api_analysis_worker():
             api_analysis_queue.task_done()
             
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # En startup, lanza el worker en background
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -263,7 +235,6 @@ async def lifespan(app: FastAPI):
     yield  
     
 app = FastAPI(lifespan=lifespan)
-posture_monitor = PostureMonitor(MI_SESION_ID)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -279,39 +250,46 @@ app.include_router(analysis.router)
 app.include_router(postura_counts.router)
 processed_frames_queue = asyncio.Queue(maxsize=10)
 
-@app.websocket("/video/input")
-async def video_input(websocket: WebSocket):
+@app.websocket("/video/input/{device_id}")
+async def video_input(websocket: WebSocket, device_id: str):
     await websocket.accept()
     loop = asyncio.get_running_loop()
     try:
+        # 1. Obtener el session_id desde Redis
+        redis_shpd_key = f"shpd-data:{device_id}"
+        session_id = r.hget(redis_shpd_key, "session_id")
+        if not session_id:
+            await websocket.close()
+            logger.error(f"No se encontró session_id en Redis para {device_id}")
+            return
+
+        posture_monitor = PostureMonitor(session_id)
         while True:
             data = await websocket.receive_bytes()
             frame = await loop.run_in_executor(None, _decode_jpeg, data)
             if frame is None:
                 continue
-            
+
             processed = await loop.run_in_executor(None, posture_monitor.process_frame, frame)
             jpeg = await loop.run_in_executor(None, _encode_jpeg, processed)
             if processed_frames_queue.full():
                 processed_frames_queue.get_nowait()
             await processed_frames_queue.put(jpeg)
-            
+
             # 3️⃣ Dispara análisis OpenAI si guardaron un frame crudo
-            raw_key = f"raw_frame:{MI_SESION_ID}"
+            raw_key = f"raw_frame:{session_id}"
             flag_value = r.hget(raw_key, "flag_alert")  
-       
             if flag_value == "1":
                 await api_analysis_queue.put({
-                    "session_id": MI_SESION_ID,
+                    "session_id": session_id,
                     "jpeg": jpeg,
-    
                 })
                 r.delete(raw_key)
-                logger.debug(f"✔️ Disparo para analisis ejecutado")
+                logger.debug(f"✔️ Disparo para analisis ejecutado para sesión {session_id}")
     except WebSocketDisconnect:
         pass
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Error en video_input: {e}")
 
 @app.websocket("/video/output")
 async def video_output(websocket: WebSocket):
@@ -332,6 +310,8 @@ def _decode_jpeg(data: bytes):
 def _encode_jpeg(frame):
     _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
     return buf.tobytes()
+
+Base.metadata.create_all(bind=engine)
 
 if __name__ == "__main__":
     uvicorn.run(

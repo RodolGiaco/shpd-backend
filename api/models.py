@@ -8,7 +8,9 @@ from sqlalchemy.dialects.postgresql import UUID, JSONB
 class Paciente(Base):
     __tablename__ = "pacientes"
 
-    id = Column(String, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(String, unique=True, index=True, nullable=False)
+    device_id = Column(String, unique=True, index=True, nullable=False)
     nombre = Column(String, nullable=False)
     edad = Column(Integer)
     sexo = Column(String)

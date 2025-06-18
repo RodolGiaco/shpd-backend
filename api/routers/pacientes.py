@@ -1,36 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
-from pydantic import BaseModel
 from api.database import get_db
 from api.models import Paciente
+from api.schemas import PacienteOut
 
 router = APIRouter(prefix="/pacientes", tags=["pacientes"])
 
-# 📦 Esquema para crear un paciente desde la API (ahora incluye id enviado por el cliente)
-class PacienteIn(BaseModel):
-    id: str
-    nombre: str
-    edad: int
-    sexo: str
-    diagnostico: str
-
-# 📦 Esquema para devolver paciente (incluye id)
-class PacienteOut(PacienteIn):
-    class Config:
-        orm_mode = True
-
-# ✅ Crear un paciente (POST)
-@router.post("/", response_model=PacienteOut)
-def crear_paciente(paciente: PacienteIn, db: Session = Depends(get_db)):
-    nuevo = Paciente(**paciente.dict())
-    db.add(nuevo)
-    db.commit()
-    db.refresh(nuevo)
-    return nuevo
-
-# ✅ Obtener todos los pacientes (GET)
-@router.get("/", response_model=List[PacienteOut])
-def obtener_pacientes(db: Session = Depends(get_db)):
-    pacientes = db.query(Paciente).all()
-    return pacientes
+@router.get("/{device_id}", response_model=PacienteOut)
+def obtener_paciente_por_device_id(
+    device_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Obtiene un paciente específico basado en el ID de su dispositivo registrado.
+    """
+    paciente = db.query(Paciente).filter(Paciente.device_id == device_id).first()
+    if not paciente:
+        raise HTTPException(status_code=404, detail="Paciente con ese device_id no fue encontrado")
+    return paciente
