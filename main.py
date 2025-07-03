@@ -254,42 +254,61 @@ processed_frames_queue = asyncio.Queue(maxsize=10)
 async def video_input(websocket: WebSocket, device_id: str):
     await websocket.accept()
     loop = asyncio.get_running_loop()
+    
+    # Variables para manejar PostureMonitor dinámicamente
+    posture_monitor = None
+    current_session_id = None
+    
     try:
-        # 1. Obtener el session_id desde Redis
-        redis_shpd_key = f"shpd-data:{device_id}"
-        session_id = r.hget(redis_shpd_key, "session_id")
-        if not session_id:
-            await websocket.close()
-            logger.error(f"No se encontró session_id en Redis para {device_id}")
-            return
-
-        posture_monitor = PostureMonitor(session_id)
         while True:
+            # 1. Verificar el session_id desde Redis en cada iteración
+            redis_shpd_key = f"shpd-data:{device_id}"
+            session_id = r.hget(redis_shpd_key, "session_id")
+            
+            # 2. Si el session_id cambió, reinicializar PostureMonitor
+            if session_id != current_session_id:
+                logger.info(f"📋 Session ID cambió de {current_session_id} a {session_id}")
+                posture_monitor = PostureMonitor(session_id)
+                current_session_id = session_id
+                logger.info(f"✅ PostureMonitor reinicializado para session {session_id}")
+
+            # 3. Procesar frame normalmente
             data = await websocket.receive_bytes()
             frame = await loop.run_in_executor(None, _decode_jpeg, data)
             if frame is None:
                 continue
 
-            processed = await loop.run_in_executor(None, posture_monitor.process_frame, frame)
-            jpeg = await loop.run_in_executor(None, _encode_jpeg, processed)
+            # Solo procesar si tenemos un PostureMonitor válido
+            if posture_monitor is None:
+                # Si no hay PostureMonitor, enviar frame sin procesar
+                jpeg = await loop.run_in_executor(None, _encode_jpeg, frame)
+            else:
+                processed = await loop.run_in_executor(None, posture_monitor.process_frame, frame)
+                jpeg = await loop.run_in_executor(None, _encode_jpeg, processed)
+            
             if processed_frames_queue.full():
                 processed_frames_queue.get_nowait()
             await processed_frames_queue.put(jpeg)
 
-            # 3️⃣ Dispara análisis OpenAI si guardaron un frame crudo
-            raw_key = f"raw_frame:{session_id}"
-            flag_value = r.hget(raw_key, "flag_alert")  
-            if flag_value == "1":
-                await api_analysis_queue.put({
-                    "session_id": session_id,
-                    "jpeg": jpeg,
-                })
-                r.delete(raw_key)
-                logger.debug(f"✔️ Disparo para analisis ejecutado para sesión {session_id}")
+            # 4. Dispara análisis OpenAI si guardaron un frame crudo (solo si hay session_id válido)
+            if posture_monitor is not None:
+                raw_key = f"raw_frame:{session_id}"
+                flag_value = r.hget(raw_key, "flag_alert")  
+                if flag_value == "1":
+                    await api_analysis_queue.put({
+                        "session_id": session_id,
+                        "jpeg": jpeg,
+                    })
+                    r.delete(raw_key)
+                    logger.debug(f"✔️ Disparo para analisis ejecutado para sesión {session_id}")
+                
     except WebSocketDisconnect:
-        pass
+        logger.info(f"WebSocket desconectado para device_id: {device_id}")
     except Exception as e:
         logger.error(f"Error en video_input: {e}")
+        logger.exception("Detalles del error:")
+    finally:
+        logger.info(f"Cerrando WebSocket para device_id: {device_id}")
 
 @app.websocket("/video/output")
 async def video_output(websocket: WebSocket):

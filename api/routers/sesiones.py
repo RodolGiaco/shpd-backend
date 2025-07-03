@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from typing import List
 from api.database import get_db
-from api.models import Sesion, Paciente
+from api.models import Sesion, Paciente, PosturaCount
 from api.schemas import SesionIn, SesionOut
 import time
 import redis
@@ -27,6 +27,9 @@ def crear_sesion(
     db.add(nueva)
     db.commit()
     db.refresh(nueva)
+    # Borrar la marca de sesión finalizada para el device_id asociado
+    if hasattr(s, 'device_id'):
+        r.delete(f"ended:{s.device_id}")
     return nueva
 
 @router.get("/", response_model=List[SesionOut])
@@ -58,6 +61,25 @@ def enviar_reporte_telegram(session_id, device_id, db: Session):
         raise Exception("Paciente no encontrado para el device_id")
     telegram_id = paciente.telegram_id
 
+    # Obtener fecha de inicio desde Redis
+    data = r.hgetall(f"shpd-session:{session_id}")
+    start_ts = int(data.get("start_ts", 0))
+    fecha = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_ts)) if start_ts else "No registrada"
+
+    # Obtener duración desde la base de datos
+    sesion = db.query(Sesion).filter_by(id=session_id).first()
+    duracion = sesion.intervalo_segundos if sesion else 0
+    duracion_str = f"{duracion // 60} min {duracion % 60} seg" if duracion else "No registrada"
+
+    # Obtener postura más contabilizada
+    postura_max = db.query(PosturaCount).filter_by(session_id=session_id).order_by(PosturaCount.count.desc()).first()
+    if postura_max:
+        postura = postura_max.posture_label
+        cantidad = postura_max.count
+    else:
+        postura = "No registrada"
+        cantidad = 0
+
     # 2. Obtener métricas finales (de Redis)
     metricas = r.lrange(f"metricas:{session_id}", 0, -1)
     resumen = "No hay métricas registradas."
@@ -65,10 +87,13 @@ def enviar_reporte_telegram(session_id, device_id, db: Session):
         ultima = json.loads(metricas[-1])
         resumen = (
             f"✅ <b>Reporte de sesión finalizada</b>\n"
-            f"Correcta: {ultima.get('porcentaje_correcta', 0)}%\n"
-            f"Incorrecta: {ultima.get('porcentaje_incorrecta', 0)}%\n"
-            f"Sentado: {ultima.get('tiempo_sentado', 0)}s\n"
-            f"Parado: {ultima.get('tiempo_parado', 0)}s\n"
+            f"Fecha: {fecha}\n"
+            f"Duración: {duracion_str}\n"
+            f"Postura más frecuente: {postura} ({cantidad} veces)\n"
+            f"Correcta: {round(ultima.get('porcentaje_correcta', 0), 1)}%\n"
+            f"Incorrecta: {round(ultima.get('porcentaje_incorrecta', 0), 1)}%\n"
+            f"Sentado: {round(ultima.get('tiempo_sentado', 0), 1)}s\n"
+            f"Parado: {round(ultima.get('tiempo_parado', 0), 1)}s\n"
             f"Alertas: {ultima.get('alertas_enviadas', 0)}"
         )
     # Limpiar datos de Redis
@@ -95,9 +120,17 @@ def finalizar_sesion(device_id: str, db: Session = Depends(get_db)):
     if not session_id:
         return {"ok": False, "message": "No se encontró session_id para este device_id"}
 
+    ended_key = f"ended:{session_id}"
+    if r.get(ended_key):
+        return {"ok": False, "message": "La sesión ya fue finalizada previamente."}
+
     # Enviar reporte a Telegram
     try:
         enviar_reporte_telegram(session_id, device_id, db)
+        # Marca la sesión como finalizada por 1 hora
+        r.setex(ended_key, 3600, "1")
+        # Elimina el session_id del buffer shpd-data:{device_id}
+        r.hdel(f"shpd-data:{device_id}", "session_id")
         return {"ok": True, "message": "Sesión finalizada, datos eliminados y reporte enviado"}
     except Exception as e:
         return {"ok": False, "message": f"Sesión finalizada, pero falló el envío a Telegram: {e}"}
