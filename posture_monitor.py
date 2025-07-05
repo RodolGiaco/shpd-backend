@@ -159,6 +159,7 @@ class PostureMonitor:
                 r.hset(raw_key, "flag_alert", "1")
                 self.flag_alert = False
                 logger.debug(f"✔️ Data save for alert")
+                self.bad_frames = 0
 
         try:
             accum = r.hgetall(buffer_key)

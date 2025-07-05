@@ -1,16 +1,18 @@
 # api/routers/sesiones.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import List
 from api.database import get_db
-from api.models import Sesion, Paciente, PosturaCount
+from api.models import Sesion, Paciente, PosturaCount, MetricaPostural
 from api.schemas import SesionIn, SesionOut
 import time
 import redis
 import requests
 import json
 import logging
+import uuid
+from fastapi.responses import JSONResponse
 
 r = redis.Redis(host="redis", port=6379, decode_responses=True)
 router = APIRouter(prefix="/sesiones", tags=["sesiones"])
@@ -134,3 +136,54 @@ def finalizar_sesion(device_id: str, db: Session = Depends(get_db)):
         return {"ok": True, "message": "Sesión finalizada, datos eliminados y reporte enviado"}
     except Exception as e:
         return {"ok": False, "message": f"Sesión finalizada, pero falló el envío a Telegram: {e}"}
+
+@router.post("/reiniciar/{session_id}")
+def reiniciar_sesion(session_id: str, device_id: str | None = Query(None), db: Session = Depends(get_db)):
+    # 0) Validar formato UUID
+    try:
+        uuid_obj = uuid.UUID(session_id)
+    except ValueError:
+        logger.warning(f"❌ session_id inválido: {session_id}")
+        return JSONResponse(status_code=400, content={"ok": False, "message": "session_id inválido"})
+
+    sesion = db.query(Sesion).filter_by(id=uuid_obj).first()
+    if not sesion:
+        return JSONResponse(status_code=404, content={"ok": False, "message": "Sesión no encontrada"})
+
+    redis_key = f"shpd-session:{session_id}"
+    data = r.hgetall(redis_key)
+    if not data:
+        intervalo = sesion.intervalo_segundos or 0
+        r.hset(redis_key, mapping={
+            "start_ts": int(time.time()),
+            "intervalo_segundos": intervalo,
+        })
+    else:
+        intervalo = int(data.get("intervalo_segundos", sesion.intervalo_segundos or 0))
+        r.hset(redis_key, mapping={
+            "start_ts": int(time.time()),
+            "intervalo_segundos": intervalo,
+        })
+
+    # Restaurar mapeo device_id -> session_id, si se provee
+    if device_id:
+        r.hset(f"shpd-data:{device_id}", mapping={"session_id": session_id})
+
+    r.delete(
+        f"shpd-data:{session_id}",
+        f"metricas:{session_id}",
+        f"analysis:{session_id}",
+        f"raw_frame:{session_id}",
+        f"ended:{session_id}",
+    )
+        # --- Limpiar datos persistentes en base de datos ---
+    try:
+        db.query(PosturaCount).filter(PosturaCount.session_id == str(uuid_obj)).delete()
+        db.query(MetricaPostural).filter(MetricaPostural.sesion_id == uuid_obj).delete()
+        db.commit()
+    except Exception as ex:
+        logger.exception("Error limpiando registros de BD al reiniciar sesión")
+        db.rollback()
+
+    logger.info(f"🔄 Sesión {session_id} reiniciada (revivida si era necesario) - device_id restaurado: {device_id}")
+    return {"ok": True, "message": "Sesión reiniciada", "session_id": session_id}
