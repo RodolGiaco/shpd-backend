@@ -17,7 +17,8 @@ import uvicorn
 from api.models import Sesion, Paciente, MetricaPostural, PosturaCount
 from api.database import Base, engine, SessionLocal
 from posture_monitor import PostureMonitor
-from api.routers import sesiones, pacientes, metricas, analysis, postura_counts
+from api.routers import sesiones, pacientes, metricas, analysis, postura_counts, timeline
+from datetime import datetime
 
 r = redis.Redis(host="redis", port=6379, decode_responses=True)
 
@@ -163,6 +164,7 @@ async def api_analysis_worker():
         payload = await api_analysis_queue.get()
         session_id = payload["session_id"]
         jpeg        = payload["jpeg"]
+        bad_time    = payload["bad_time"]
         b64 = base64.b64encode(jpeg).decode("utf-8")
         try:
             messages = build_openai_messages(b64)
@@ -214,6 +216,17 @@ async def api_analysis_worker():
                        db.add(nueva)
                    db.commit()
                    logger.debug(f"✔️ PostureCount updated: {session_id} - {top_label}")
+                   # Guardar evento de timeline
+                   try:
+                       evt = {
+                           "timestamp": datetime.utcnow().isoformat(),
+                           "postura": top_label,
+                           "tiempo_mala_postura": bad_time
+                       }
+                       r.rpush(f"timeline:{session_id}", json.dumps(evt))
+                       r.ltrim(f"timeline:{session_id}", -200, -1)
+                   except Exception:
+                       logger.exception("Error guardando timeline")
                except Exception:
                    logger.exception("Error actualizando PosturaCount en DB")
                    db.rollback()
@@ -248,6 +261,7 @@ app.include_router(pacientes.router)
 app.include_router(metricas.router)
 app.include_router(analysis.router)
 app.include_router(postura_counts.router)
+app.include_router(timeline.router)
 processed_frames_queue = asyncio.Queue(maxsize=10)
 
 @app.websocket("/video/input/{device_id}")
@@ -294,10 +308,12 @@ async def video_input(websocket: WebSocket, device_id: str):
             if posture_monitor is not None:
                 raw_key = f"raw_frame:{session_id}"
                 flag_value = r.hget(raw_key, "flag_alert")  
+                bad_time = r.hget(raw_key, "bad_time")  
                 if flag_value == "1":
                     await api_analysis_queue.put({
                         "session_id": session_id,
                         "jpeg": jpeg,
+                        "bad_time": bad_time
                     })
                     r.delete(raw_key)
                     logger.debug(f"✔️ Disparo para analisis ejecutado para sesión {session_id}")

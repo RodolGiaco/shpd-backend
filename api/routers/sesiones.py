@@ -175,6 +175,7 @@ def reiniciar_sesion(session_id: str, device_id: str | None = Query(None), db: S
         f"analysis:{session_id}",
         f"raw_frame:{session_id}",
         f"ended:{session_id}",
+        f"timeline:{session_id}"
     )
         # --- Limpiar datos persistentes en base de datos ---
     try:

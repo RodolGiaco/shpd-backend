@@ -157,6 +157,7 @@ class PostureMonitor:
                 r.hincrby(buffer_key, "alert_count", 1)
                 logger.debug(f"✔️ start")
                 r.hset(raw_key, "flag_alert", "1")
+                r.hset(raw_key, "bad_time", round(bad_time, 1))
                 self.flag_alert = False
                 logger.debug(f"✔️ Data save for alert")
                 self.bad_frames = 0
