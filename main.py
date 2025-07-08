@@ -280,24 +280,25 @@ async def video_input(websocket: WebSocket, device_id: str):
     # Variables para manejar PostureMonitor dinámicamente
     posture_monitor = None
     current_session_id = None
-    
+    calibrating = None
+    mode = None
     try:
         while True:
             # 1. Verificar el session_id desde Redis en cada iteración
             redis_shpd_key = f"shpd-data:{device_id}"
             session_id = r.hget(redis_shpd_key, "session_id")
-            
-            # Si estamos calibrando y aún no hay session_id, crea uno temporal antes de crear PostureMonitor
-            # if calibrating_query and not session_id:
-            #     session_id = f"calib-{device_id}"
-            #     r.hset(redis_shpd_key, mapping={"session_id": session_id})
 
-            # calibrating = calibrating_query or (session_id and str(session_id).startswith("calib-"))
-            
-            # 2. Si el session_id cambió, reinicializar PostureMonitor
+            # ——— Determinar si seguimos en modo calibración ———
+            mode = r.hget(redis_shpd_key, "mode")
+            if mode is None:
+                calibrating = calibrating_query  # aún no hay session_id: usa flag de la URL
+            elif mode == "normal":
+                calibrating = False
+           
+            # 2. Si el session_id cambió, reinicializar PostureMonitor con el modo correcto
             if session_id != current_session_id:
                 logger.info(f"📋 Session ID cambió de {current_session_id} a {session_id}")
-                posture_monitor = PostureMonitor(session_id, save_metrics=not calibrating_query)
+                posture_monitor = PostureMonitor(session_id, save_metrics=not calibrating)
                 current_session_id = session_id
                 logger.info(f"✅ PostureMonitor reinicializado para session {session_id}")
 
@@ -320,7 +321,7 @@ async def video_input(websocket: WebSocket, device_id: str):
             await processed_frames_queue.put(jpeg)
 
             # 4. Dispara análisis OpenAI si guardaron un frame crudo (solo si hay session_id válido)
-            if posture_monitor is not None and not calibrating_query:
+            if posture_monitor is not None and not calibrating:
                 raw_key = f"raw_frame:{session_id}"
                 flag_value = r.hget(raw_key, "flag_alert")  
                 bad_time = r.hget(raw_key, "bad_time")  

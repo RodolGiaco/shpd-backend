@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from fastapi import HTTPException
 import redis
 import logging
 
@@ -18,3 +19,20 @@ def calib_progress(session_id: str):
         "bad_time": bad,
         "correcta": good > bad
     }
+
+# Endpoint para resetear (borrar) el flag 'mode' y dejar que el backend lo regenere
+@router.post("/mode/reset/{device_id}")
+def reset_mode(device_id: str):
+    key = f"shpd-data:{device_id}"
+    r.hdel(key, "mode")
+    return {"device_id": device_id, "mode": None, "status": "reset"}
+
+# Endpoint para cambiar el modo de un dispositivo
+@router.post("/mode/{device_id}/{mode}")
+def set_mode(device_id: str, mode: str):
+    if mode not in ("calib", "normal"):
+        raise HTTPException(status_code=400, detail="mode must be 'calib' or 'normal'")
+
+    key = f"shpd-data:{device_id}"
+    r.hset(key, mapping={"mode": mode})
+    return {"device_id": device_id, "mode": mode}
