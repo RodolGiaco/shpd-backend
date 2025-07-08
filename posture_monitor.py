@@ -15,9 +15,20 @@ r = redis.Redis(host='redis', port=6379, decode_responses=True)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 class PostureMonitor:
-    def __init__(self,  session_id: str):
+    def __init__(self,  session_id: str, *, save_metrics: bool = True):
+        logger.info(f"[PostureMonitor] Instanciado para session_id={session_id} save_metrics={save_metrics}")
         self.mp_drawing = mp.solutions.drawing_utils
         self.session_id = session_id
+        self.save_metrics = save_metrics
+
+        # Si estamos en modo calibración, reiniciar los contadores de Redis
+        if not self.save_metrics:
+            calib_key = f"calib:{self.session_id}"
+            try:
+                r.delete(calib_key)
+                logger.debug(f"🔄 Clave {calib_key} eliminada para reiniciar la calibración")
+            except Exception:
+                logger.exception("Error al reiniciar la clave de calibración")
         self.mp_pose = mp.solutions.pose  # RPI3 FIX
         self.args = self.parse_arguments()
 
@@ -150,17 +161,18 @@ class PostureMonitor:
             time_string_bad = 'Bad Posture Time : ' + str(round(bad_time, 1)) + 's'
             cv2.putText(image, time_string_bad, (10, h - 20), self.font, 0.9, (50, 50, 255), 2)
 
-        if bad_time > self.args.time_threshold:
-            if self.flag_alert:
-                self.sendWarning()
-                raw_key = f"raw_frame:{self.session_id}"
-                r.hincrby(buffer_key, "alert_count", 1)
-                logger.debug(f"✔️ start")
-                r.hset(raw_key, "flag_alert", "1")
-                r.hset(raw_key, "bad_time", round(bad_time, 1))
-                self.flag_alert = False
-                logger.debug(f"✔️ Data save for alert")
-                self.bad_frames = 0
+        if self.save_metrics:
+            if bad_time > self.args.time_threshold:
+                if self.flag_alert:
+                    self.sendWarning()
+                    raw_key = f"raw_frame:{self.session_id}"
+                    r.hincrby(buffer_key, "alert_count", 1)
+                    logger.debug("✔️ start")
+                    r.hset(raw_key, "flag_alert", "1")
+                    r.hset(raw_key, "bad_time", round(bad_time, 1))
+                    self.flag_alert = False
+                    logger.debug("✔️ Data save for alert")
+                    self.bad_frames = 0
 
         try:
             accum = r.hgetall(buffer_key)
@@ -185,7 +197,16 @@ class PostureMonitor:
             }
         except Exception:
             logger.exception("Failed metrics")
-        self.save_data_to_redis(datos)
+        if self.save_metrics:
+            self.save_data_to_redis(datos)
+
+        # --- Calibración: guardar good_time y bad_time en buffer separado ---
+        if not self.save_metrics:
+            calib_key = f"calib:{self.session_id}"
+            if good_time > 0:
+                r.hincrbyfloat(calib_key, "good_time", round(1.0 / fps, 2))
+            if bad_time > 0:
+                r.hincrbyfloat(calib_key, "bad_time", round(1.0 / fps, 2))
 
         return image
 

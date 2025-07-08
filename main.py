@@ -17,7 +17,7 @@ import uvicorn
 from api.models import Sesion, Paciente, MetricaPostural, PosturaCount
 from api.database import Base, engine, SessionLocal
 from posture_monitor import PostureMonitor
-from api.routers import sesiones, pacientes, metricas, analysis, postura_counts, timeline
+from api.routers import sesiones, pacientes, metricas, analysis, postura_counts, timeline, calibracion
 from datetime import datetime
 
 r = redis.Redis(host="redis", port=6379, decode_responses=True)
@@ -262,6 +262,7 @@ app.include_router(metricas.router)
 app.include_router(analysis.router)
 app.include_router(postura_counts.router)
 app.include_router(timeline.router)
+app.include_router(calibracion.router)
 processed_frames_queue = asyncio.Queue(maxsize=10)
 
 @app.websocket("/video/input/{device_id}")
@@ -269,6 +270,13 @@ async def video_input(websocket: WebSocket, device_id: str):
     await websocket.accept()
     loop = asyncio.get_running_loop()
     
+    # Detectar modo calibración: query ?calibracion=1
+    calibrating_query = websocket.scope.get("query_string", b"").decode().find("calibracion=1") >= 0
+    if calibrating_query:
+        await websocket.send_text(json.dumps({"type": "modo", "calibracion": True}))
+    else:
+        await websocket.send_text(json.dumps({"type": "modo", "calibracion": False}))
+
     # Variables para manejar PostureMonitor dinámicamente
     posture_monitor = None
     current_session_id = None
@@ -279,10 +287,17 @@ async def video_input(websocket: WebSocket, device_id: str):
             redis_shpd_key = f"shpd-data:{device_id}"
             session_id = r.hget(redis_shpd_key, "session_id")
             
+            # Si estamos calibrando y aún no hay session_id, crea uno temporal antes de crear PostureMonitor
+            # if calibrating_query and not session_id:
+            #     session_id = f"calib-{device_id}"
+            #     r.hset(redis_shpd_key, mapping={"session_id": session_id})
+
+            # calibrating = calibrating_query or (session_id and str(session_id).startswith("calib-"))
+            
             # 2. Si el session_id cambió, reinicializar PostureMonitor
             if session_id != current_session_id:
                 logger.info(f"📋 Session ID cambió de {current_session_id} a {session_id}")
-                posture_monitor = PostureMonitor(session_id)
+                posture_monitor = PostureMonitor(session_id, save_metrics=not calibrating_query)
                 current_session_id = session_id
                 logger.info(f"✅ PostureMonitor reinicializado para session {session_id}")
 
@@ -305,7 +320,7 @@ async def video_input(websocket: WebSocket, device_id: str):
             await processed_frames_queue.put(jpeg)
 
             # 4. Dispara análisis OpenAI si guardaron un frame crudo (solo si hay session_id válido)
-            if posture_monitor is not None:
+            if posture_monitor is not None and not calibrating_query:
                 raw_key = f"raw_frame:{session_id}"
                 flag_value = r.hget(raw_key, "flag_alert")  
                 bad_time = r.hget(raw_key, "bad_time")  
